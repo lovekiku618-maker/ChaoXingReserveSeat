@@ -3,6 +3,7 @@ import time
 import argparse
 import os
 import logging
+import random
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -100,7 +101,28 @@ def login_and_reserve(users, usernames, passwords, action, success_list=None):
         )
 
         suc = s.submit(times, deptidenc, roomid, seatid, action)
+
+
         success_list[index] = suc
+
+
+
+        # 多时间段预约之间增加短随机间隔，模拟再次预约操作
+
+
+        # 避免连续瞬间发送，同时保持抢座速度
+
+
+        if index < len(users) - 1:
+
+
+            delay = random.uniform(0.8, 1.8)
+
+
+            logging.info(f"Waiting {delay:.2f}s before next reservation")
+
+
+            time.sleep(delay)
 
     return success_list
 
