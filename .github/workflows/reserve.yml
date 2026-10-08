@@ -2,27 +2,31 @@
 
 name: auto_Reserve
 
-# Controls when the action will run. Workflow runs when manually triggered using the UI
-# or API.
 on:
   schedule:
-    - cron: "59 21 * * 0,1,2,3,4" # 周一到周五每天早上5:59启动（防止github action过于高负载）
+    # GitHub Actions 使用 UTC 时间
+    # 北京时间 07:58 = UTC 23:58
+    # 提前启动，让程序等待到学校8:00开放
+    - cron: "58 23 * * *"
+
   workflow_dispatch:
-  
+
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v2
-  
+      - uses: actions/checkout@v4
+
       - name: Set up Python 3.11
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v5
         with:
           python-version: 3.11
+
       - name: install dependency
         run: |
           python -m pip install --upgrade pip
-          sudo apt-get install build-essential libssl-dev libffi-dev  python3-dev -y
+          sudo apt-get install build-essential libssl-dev libffi-dev python3-dev -y
           pip install cryptography requests opencv-python
 
       - name: run script
@@ -30,6 +34,4 @@ jobs:
           USERNAMES: ${{ secrets.USERNAMES }}
           PASSWORDS: ${{ secrets.PASSWORDS }}
         run: |
-          python main.py -m debug --action
-
-
+          python main.py --action
