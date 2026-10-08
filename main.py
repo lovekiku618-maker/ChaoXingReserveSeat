@@ -49,39 +49,59 @@ def login_and_reserve(users, usernames, passwords, action, success_list=None):
     logging.info(
         f"Global settings: \nSTARTTIME: {STARTTIME}\nSLEEPTIME: {SLEEPTIME}\nENDTIME: {ENDTIME}\nENABLE_SLIDER: {ENABLE_SLIDER}\nRESERVE_NEXT_DAY: {RESERVE_NEXT_DAY}"
     )
-    if action and len(usernames.split(",")) != len(users):
-        raise Exception("user number should match the number of config")
+
     if success_list is None:
         success_list = [False] * len(users)
+
+    if not users:
+        return success_list
+
     current_dayofweek = get_current_dayofweek(action)
+
+    # 优化：同一账号多个预约时间段，只登录一次，复用 session
+    if action:
+        username_list = usernames.split(",")
+        password_list = passwords.split(",")
+        if len(username_list) != 1 or len(password_list) != 1:
+            raise Exception("optimized mode requires one account")
+        username = username_list[0]
+        password = password_list[0]
+    else:
+        username, password, _, _, _, _, _ = unpack_user(users[0])
+
+    s = reserve(
+        sleep_time=SLEEPTIME,
+        max_attempt=MAX_ATTEMPT,
+        enable_slider=ENABLE_SLIDER,
+        reserve_next_day=RESERVE_NEXT_DAY,
+    )
+
+    s.get_login_status()
+    login_ok, _ = s.login(username, password)
+
+    if not login_ok:
+        logging.error("Skipping reservation because login failed")
+        return success_list
+
+    s.requests.headers.update({"Host": "office.chaoxing.com"})
+
     for index, user in enumerate(users):
-        username, password, times, deptidenc, roomid, seatid, daysofweek = unpack_user(user)
-        if action:
-            username, password = (
-                usernames.split(",")[index],
-                passwords.split(",")[index],
-            )
+        if success_list[index]:
+            continue
+
+        _, _, times, deptidenc, roomid, seatid, daysofweek = unpack_user(user)
+
         if current_dayofweek not in daysofweek:
             logging.info("Today not set to reserve")
             continue
-        if not success_list[index]:
-            logging.info(
-                f"----------- configuration {index + 1} -- {times} -- {seatid} try -----------"
-            )
-            s = reserve(
-                sleep_time=SLEEPTIME,
-                max_attempt=MAX_ATTEMPT,
-                enable_slider=ENABLE_SLIDER,
-                reserve_next_day=RESERVE_NEXT_DAY,
-            )
-            s.get_login_status()
-            login_ok, _ = s.login(username, password)
-            if not login_ok:
-                logging.error("Skipping reservation because login failed")
-                continue
-            s.requests.headers.update({"Host": "office.chaoxing.com"})
-            suc = s.submit(times, deptidenc, roomid, seatid, action)
-            success_list[index] = suc
+
+        logging.info(
+            f"----------- configuration {index + 1} -- {times} -- {seatid} try -----------"
+        )
+
+        suc = s.submit(times, deptidenc, roomid, seatid, action)
+        success_list[index] = suc
+
     return success_list
 
 
