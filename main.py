@@ -23,17 +23,31 @@ get_current_dayofweek = lambda action: (
 )
 
 
-SLEEPTIME = 0.2  # 每次抢座的间隔
-ENDTIME = "07:01:00"  # 根据学校的预约座位时间+1min即可
+STARTTIME = "08:00:00"  # 学校开放预约的时间
+SLEEPTIME = 3.0  # 每次尝试的间隔，避免高频请求
+ENDTIME = "08:01:00"  # 根据学校的预约座位时间+1min即可
 
-ENABLE_SLIDER = True  # 是否有滑块验证
-MAX_ATTEMPT = 5  # 最大尝试次数
-RESERVE_NEXT_DAY = False  # 预约明天而不是今天的
+ENABLE_SLIDER = False  # 当前学校服务器 securityVerify=0，无需验证码
+MAX_ATTEMPT = 1  # 每轮只请求一次，由外层循环按 SLEEPTIME 重试
+RESERVE_NEXT_DAY = True  # 预约明天而不是今天的
+
+
+def unpack_user(user):
+    """Read named config fields so adding a school identifier is order-safe."""
+    return (
+        user.get("username", ""),
+        user.get("password", ""),
+        user.get("time", []),
+        user.get("deptidenc", ""),
+        str(user.get("roomid", "")),
+        user.get("seatid", []),
+        user.get("daysofweek", []),
+    )
 
 
 def login_and_reserve(users, usernames, passwords, action, success_list=None):
     logging.info(
-        f"Global settings: \nSLEEPTIME: {SLEEPTIME}\nENDTIME: {ENDTIME}\nENABLE_SLIDER: {ENABLE_SLIDER}\nRESERVE_NEXT_DAY: {RESERVE_NEXT_DAY}"
+        f"Global settings: \nSTARTTIME: {STARTTIME}\nSLEEPTIME: {SLEEPTIME}\nENDTIME: {ENDTIME}\nENABLE_SLIDER: {ENABLE_SLIDER}\nRESERVE_NEXT_DAY: {RESERVE_NEXT_DAY}"
     )
     if action and len(usernames.split(",")) != len(users):
         raise Exception("user number should match the number of config")
@@ -41,7 +55,7 @@ def login_and_reserve(users, usernames, passwords, action, success_list=None):
         success_list = [False] * len(users)
     current_dayofweek = get_current_dayofweek(action)
     for index, user in enumerate(users):
-        username, password, times, roomid, seatid, daysofweek = user.values()
+        username, password, times, deptidenc, roomid, seatid, daysofweek = unpack_user(user)
         if action:
             username, password = (
                 usernames.split(",")[index],
@@ -52,7 +66,7 @@ def login_and_reserve(users, usernames, passwords, action, success_list=None):
             continue
         if not success_list[index]:
             logging.info(
-                f"----------- {username} -- {times} -- {seatid} try -----------"
+                f"----------- configuration {index + 1} -- {times} -- {seatid} try -----------"
             )
             s = reserve(
                 sleep_time=SLEEPTIME,
@@ -61,9 +75,12 @@ def login_and_reserve(users, usernames, passwords, action, success_list=None):
                 reserve_next_day=RESERVE_NEXT_DAY,
             )
             s.get_login_status()
-            s.login(username, password)
+            login_ok, _ = s.login(username, password)
+            if not login_ok:
+                logging.error("Skipping reservation because login failed")
+                continue
             s.requests.headers.update({"Host": "office.chaoxing.com"})
-            suc = s.submit(times, roomid, seatid, action)
+            suc = s.submit(times, deptidenc, roomid, seatid, action)
             success_list[index] = suc
     return success_list
 
@@ -80,6 +97,12 @@ def main(users, action=False):
     today_reservation_num = sum(
         1 for d in users if current_dayofweek in d.get("daysofweek")
     )
+    if current_time >= ENDTIME:
+        logging.info("Reservation window has ended; no request was sent")
+        return False
+    while current_time < STARTTIME:
+        time.sleep(1)
+        current_time = get_current_time(action)
     while current_time < ENDTIME:
         attempt_times += 1
         # try:
@@ -94,12 +117,16 @@ def main(users, action=False):
         current_time = get_current_time(action)
         if sum(success_list) == today_reservation_num:
             print(f"reserved successfully!")
-            return
+            return True
+        time.sleep(SLEEPTIME)
+    logging.error("Reservation window ended without a confirmed successful reservation")
+    return False
 
 
 def debug(users, action=False):
+    logging.warning("Debug mode submits a real reservation immediately; use check for read-only validation")
     logging.info(
-        f"Global settings: \nSLEEPTIME: {SLEEPTIME}\nENDTIME: {ENDTIME}\nENABLE_SLIDER: {ENABLE_SLIDER}\nRESERVE_NEXT_DAY: {RESERVE_NEXT_DAY}"
+        f"Global settings: \nSTARTTIME: {STARTTIME}\nSLEEPTIME: {SLEEPTIME}\nENDTIME: {ENDTIME}\nENABLE_SLIDER: {ENABLE_SLIDER}\nRESERVE_NEXT_DAY: {RESERVE_NEXT_DAY}"
     )
     suc = False
     logging.info(f" Debug Mode start! , action {'on' if action else 'off'}")
@@ -107,7 +134,7 @@ def debug(users, action=False):
         usernames, passwords = get_user_credentials(action)
     current_dayofweek = get_current_dayofweek(action)
     for index, user in enumerate(users):
-        username, password, times, roomid, seatid, daysofweek = user.values()
+        username, password, times, deptidenc, roomid, seatid, daysofweek = unpack_user(user)
         if type(seatid) == str:
             seatid = [seatid]
         if action:
@@ -118,7 +145,7 @@ def debug(users, action=False):
         if current_dayofweek not in daysofweek:
             logging.info("Today not set to reserve")
             continue
-        logging.info(f"----------- {username} -- {times} -- {seatid} try -----------")
+        logging.info(f"----------- configuration {index + 1} -- {times} -- {seatid} try -----------")
         s = reserve(
             sleep_time=SLEEPTIME,
             max_attempt=MAX_ATTEMPT,
@@ -126,11 +153,67 @@ def debug(users, action=False):
             reserve_next_day=RESERVE_NEXT_DAY,
         )
         s.get_login_status()
-        s.login(username, password)
+        login_ok, _ = s.login(username, password)
+        if not login_ok:
+            logging.error("Debug stopped because login failed")
+            continue
         s.requests.headers.update({"Host": "office.chaoxing.com"})
-        suc = s.submit(times, roomid, seatid, action)
+        suc = s.submit(times, deptidenc, roomid, seatid, action)
         if suc:
             return
+
+
+def check(users, action=False):
+    """Verify login and seat-page parameters without submitting a reservation."""
+    logging.info("Read-only check mode: the submit endpoint will not be called")
+    usernames, passwords = (None, None)
+    if action:
+        usernames, passwords = get_user_credentials(action)
+    all_ok = True
+    for index, user in enumerate(users):
+        username, password, times, deptidenc, roomid, seatid, daysofweek = unpack_user(user)
+        if type(seatid) == str:
+            seatid = [seatid]
+        if action:
+            username, password = (
+                usernames.split(",")[index],
+                passwords.split(",")[index],
+            )
+        s = reserve(
+            sleep_time=SLEEPTIME,
+            max_attempt=MAX_ATTEMPT,
+            enable_slider=False,
+            reserve_next_day=RESERVE_NEXT_DAY,
+        )
+        s.get_login_status()
+        login_ok, _ = s.login(username, password)
+        if not login_ok:
+            logging.error("Configuration %s: login failed; no seat request was sent", index + 1)
+            all_ok = False
+            continue
+        s.requests.headers.update({"Host": "office.chaoxing.com"})
+        for seat in seatid:
+            result = s.verify_target(roomid, seat, deptidenc)
+            target_ok = (
+                result["logged_in"]
+                and result["page_deptidenc"] == str(deptidenc)
+                and result["page_roomid"] == str(roomid)
+                and result["page_seatid"] == str(seat)
+                and result["has_submit_form"]
+                and result.get("room_info_success", False)
+                and result.get("server_roomid") == str(roomid)
+                and result.get("seat_in_room_range", False)
+            )
+            logging.info(
+                "Configuration %s: room=%s seat=%s read-only check=%s details=%s",
+                index + 1,
+                roomid,
+                seat,
+                "passed" if target_ok else "failed",
+                result,
+            )
+            all_ok = all_ok and target_ok
+    return all_ok
 
 
 def get_roomid(args1, args2):
@@ -157,7 +240,7 @@ if __name__ == "__main__":
         "-m",
         "--method",
         default="reserve",
-        choices=["reserve", "debug", "room"],
+        choices=["reserve", "debug", "check", "room"],
         help="for debug",
     )
     parser.add_argument(
@@ -167,7 +250,9 @@ if __name__ == "__main__":
         help="use --action to enable in github action",
     )
     args = parser.parse_args()
-    func_dict = {"reserve": main, "debug": debug, "room": get_roomid}
+    func_dict = {"reserve": main, "debug": debug, "check": check, "room": get_roomid}
     with open(args.user, "r+") as data:
         usersdata = json.load(data)["reserve"]
-    func_dict[args.method](usersdata, args.action)
+    result = func_dict[args.method](usersdata, args.action)
+    if args.method == "check" and not result:
+        raise SystemExit(1)
